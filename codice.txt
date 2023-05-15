@@ -1,0 +1,200 @@
+//#include <splash.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SENSOR A0
+#define ENCODER_SW 6
+#define ENCODER_CLK 2
+#define ENCODER_DT 7
+#define OUT 13
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+// On an arduino UNO:       A4(SDA), A5(SCL)
+#define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+#define SCREEN_ADDRESS 0x3C //< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+float gradi = 0; //gradi
+float tMax = 26; //temperatura Massima
+float tMin = 19; //temperatura Minima
+volatile float encoderVal = 0;
+int oldClk; //vecchia clk dell'encoder
+//int vecchioEncoderVal = encoderVal;
+int menu = 0;
+bool alreadyPressed = 0;
+String mode[3] = {"Auto", "OFF", "ON"};
+int nMode = 0;
+String actType[2] = {"HEATER", "COOLER"}; //tipo di attuatore
+bool nActType = 0;
+unsigned long oldMillis = 0;
+bool updateOldMillis = 0;
+String statDisplay = "OFF";
+
+void setup() {
+  Serial.begin(115200);
+  //analogReference(EXTERNAL); //<<<<external
+  pinMode(ENCODER_CLK, INPUT_PULLUP);
+  pinMode(ENCODER_DT, INPUT_PULLUP);
+  pinMode(ENCODER_SW, INPUT_PULLUP);
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(OUT, OUTPUT);
+
+  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {  //<<<<forse MOLTO importante
+    Serial.println(F("SSD1306 allocation failed"));
+    for (;;); // Don't proceed, loop forever
+  }
+  display.clearDisplay();
+  attachInterrupt(digitalPinToInterrupt(ENCODER_CLK), encoder_val, CHANGE); //interrupt
+}
+
+void loop() {
+  if (nMode == 0) {   //logica termostato
+    if (nActType == 0) {
+      if (gradi <= tMin) {
+        digitalWrite(OUT, HIGH);
+        statDisplay = "---------ON----------";
+      }
+      else if (gradi >= tMax) {
+        digitalWrite(OUT, LOW);
+        statDisplay = "---------OFF---------";
+      }
+    }
+    else if (nActType == 1) {
+      if (gradi >= tMax) {
+        digitalWrite(OUT, HIGH);
+        statDisplay = "-ON";
+      }
+      else if (gradi <= tMin) {
+        digitalWrite(OUT, LOW);
+        statDisplay = "OFF";
+      }
+    }
+  }
+  gradi = analogRead(SENSOR) * 0.0444;    //messa in scala temperatura
+  delay(10);
+  switch (menu) {
+    case 0:   //pagina principale
+      testdrawstyles();
+      break;
+    case 1:   //impostazione temperatura minima
+      tMin = tMin + encoderVal * 0.1;
+      encoderVal = 0;
+      if (tMin < 5)tMin = 5;
+      if (tMin > 44.9)tMin = 44.9;
+      display.clearDisplay();
+      display.setCursor(20, 5);            // Start at top-left corner
+
+      display.setTextSize(2);             // Draw 2X-scale text
+      display.setTextColor(SSD1306_WHITE); // Draw 'inverse' text
+      display.println(F("T MIN"));
+
+      display.setTextSize(3);             // Draw 2X-scale text
+      display.setTextColor(SSD1306_WHITE);
+      display.print(tMin , 1); //taglia ,1
+      display.println(F(" C"));
+      display.display();
+      break;
+    case 2:   //impostazione temperatura massima
+      tMax = tMax + encoderVal * 0.1;
+      encoderVal = 0;
+      if (tMax < 5.1)tMax = 5.1;
+      if (tMax > 45)tMax = 45;
+      if (tMax <= tMin)tMax = tMin;
+      display.clearDisplay();
+      display.setCursor(20, 5);            // Start at top-left corner
+
+      display.setTextSize(2);             // Draw 2X-scale text
+      display.setTextColor(SSD1306_WHITE); // Draw 'inverse' text
+      display.println(F("T MAX"));
+
+      display.setTextSize(3);             // Draw 2X-scale text
+      display.setTextColor(SSD1306_WHITE);
+      display.print(tMax , 1); //taglia ,1
+      display.println(F(" C"));
+      display.display();
+      break;
+    case 3:   //impostazione modalità termostato
+      nMode = nMode + encoderVal;
+      encoderVal = 0;
+      if (nMode < 0)nMode = 0;
+      if (nMode > 2)nMode = 2;
+      if (nMode == 1)digitalWrite(OUT, LOW); //manuale OFF
+      if (nMode == 2)digitalWrite(OUT, HIGH); //manuale ON
+      display.clearDisplay();
+      display.setCursor(15, 5);            // Start at top-left corner
+
+      display.setTextSize(2);             // Draw 2X-scale text
+      display.setTextColor(SSD1306_WHITE); // Draw 'inverse' text
+      display.println(F("MODE"));
+
+      display.setTextSize(3);             // Draw 2X-scale text
+      display.setTextColor(SSD1306_WHITE);
+      display.print(mode[nMode]);
+      display.display();
+      break;
+    case 4:   //impostazione tipo di attuatore
+      nActType = nActType + encoderVal;
+      encoderVal = 0;
+      if (nActType < 0)nActType = 0;
+      if (nActType > 1)nActType = 1;
+      display.clearDisplay();
+      display.setCursor(10, 5);            // Start at top-left corner
+
+      display.setTextSize(2);             // Draw 2X-scale text
+      display.setTextColor(SSD1306_WHITE); // Draw 'inverse' text
+      display.println(F("ACT. TYPE"));
+
+      display.setTextSize(3);             // Draw 2X-scale text
+      display.setTextColor(SSD1306_WHITE);
+      display.print(actType[nActType]); //taglia ,1
+      display.display();
+      break;
+  }
+  if (!digitalRead(ENCODER_SW) && !alreadyPressed) {    //selezione menu con pulsante
+    menu++;
+    alreadyPressed = 1;
+    updateOldMillis = 1;
+    delay(20);
+  }
+  else if (digitalRead(ENCODER_SW) && alreadyPressed) alreadyPressed = 0;  
+  if (menu > 4 || millis() - oldMillis > 5000)menu = 0;   //torna alla pagina pincipale dopo 5 sec
+  if(updateOldMillis == 1){    //oldMillis non puo essere agiornato nell'ISR
+    oldMillis = millis();
+    updateOldMillis = 0;
+    }
+}
+
+void isrEncoder() {
+  int clkVal = digitalRead(ENCODER_CLK);
+  if ((oldClk == 0) && (clkVal == 1)) { //controlla se clk è diverso dalla lettura precedente e se clk è cambiato ad 1
+    if (digitalRead(ENCODER_DT) == 0) encoderVal++;
+    else encoderVal--;
+  }
+  oldClk = clkVal;
+  updateOldMillis = 1;
+}
+
+int testdrawstyles() {
+  display.clearDisplay();
+  display.setCursor(5, 0);            // Start at top-left corner
+  display.setTextSize(2);             // Draw 2X-scale text
+  display.setTextColor(SSD1306_WHITE); // Draw 'inverse' text
+  display.println(F("THERMOSTAT"));
+ 
+ // display.drawFastHLine(0, 16, 128, SSD1306_WHITE);
+ 
+  display.setCursor(0, 18);            // Start at top-left corner
+  display.setTextSize(1);             // Draw 2X-scale text
+  display.print(statDisplay);
+ 
+  display.setCursor(12, 35);            // Start at top-left corner
+  display.setTextSize(3);             // Draw 2X-scale text
+  display.print(gradi ,1); //taglia ,1
+  display.println(F(" C"));
+ 
+  display.display();
+}
